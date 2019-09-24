@@ -4,20 +4,20 @@
 #include <unistd.h>
 #include <unordered_map>
 
-#define PORT 4242
+#include "state.h"
+
+// ticks per second
 #define TICK_RATE 64
 #define TICK_US (1000000 / TICK_RATE)
-#define WORLD_SIZE 8
 
-using std::cout;
-using std::endl;
 using std::unordered_map;
 
+using std::chrono::duration_cast;
 using std::chrono::microseconds;
 using std::chrono::high_resolution_clock;
 
-void process_input(unsigned player_id, int client_input, game_state *state) {
-    player = state.players[player_id];
+void process_input(unsigned player_id, int client_input, GameState &state) {
+    auto& player = state.players[player_id];
     switch(client_input) {
         case 'w':
             if (player.y > 0) player.y--;
@@ -36,50 +36,63 @@ void process_input(unsigned player_id, int client_input, game_state *state) {
     }
 }
 
-int main()
+int main(int argc, char **argv)
 {
-    int sockfd;
-    struct sockaddr_in client_addr;
-    socklen_t addrlen = sizeof(client_addr);
-    unordered_map<unsigned, unsigned> players;
-    char game_state[4][2] = {0};
-    unsigned player_id;
-    int client_input;
+    if (argc != 2) {
+        std::cout << "Usage: server [port]\n";
+        return 0;
+    }
+    const unsigned short port = atoi(argv[1]);
 
-    struct sockaddr_in server_addr = {
-        .sin_family = AF_INET,
-        .sin_port = htons(PORT),
-        .sin_addr = {
-            .s_addr = INADDR_ANY
-        },
-        .sin_zero = {0}
-    };
+    int sockfd;
+    struct sockaddr_in client_addr[MAX_PLAYERS];
+    struct sockaddr_in current_client;
+    socklen_t addrlen = sizeof(current_client);
+    unordered_map<unsigned, unsigned> players;
+    GameState state;
+    unsigned pid;
+    int client_input;
+    fd_set set;
+
+    struct sockaddr_in sin = {};
+    sin.sin_family = AF_INET;
+    sin.sin_port = htons(port);
+    sin.sin_addr.s_addr = INADDR_ANY;
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr));
+    bind(sockfd, (const struct sockaddr *)&sin, sizeof(sin));
 
     auto next_tick = high_resolution_clock::now();
     microseconds tick_us = microseconds(TICK_US);
 
-    cout << "Server online!" << endl;
+    struct timeval tv = {};
 
     while(1) {
         next_tick += tick_us;
+        // while waiting for tick, collect user input and update game state
         while (high_resolution_clock::now() < next_tick) {
-            recvfrom(sockfd, &client_input, sizeof(client_input),
-                0, (struct sockaddr *)&client_addr, &addrlen);
-            player_id = client_addr.sin_port;
-            if (players.find(player_id) == players.end()) {
-                players[player_id] = players.size();
-                cout << players[player_id] << endl;
+            FD_ZERO(&set);
+            FD_SET(sockfd, &set);
+            tv.tv_usec = duration_cast<microseconds>(next_tick - high_resolution_clock::now()).count();
+            // wait for input
+            if (select(sockfd+1, &set, NULL, NULL, &tv) > 0) {
+                recvfrom(sockfd, &client_input, sizeof(client_input),
+                    0, (struct sockaddr *)&current_client, &addrlen);
+                pid = current_client.sin_port;
+                if (players.find(pid) == players.end()) {
+                    // new player
+                    players[pid] = players.size();
+                    client_addr[players[pid]] = current_client;
+                }
+                // change game state
+                process_input(players[pid], client_input, state);
             }
-            process_input(players[player_id], client_input, game_state);
-            cout << client_addr.sin_port << endl;
         }
-        // convert input to game state changes
-        // send game state to clients
-        sendto(sockfd, game_state, sizeof(game_state), 0,
-            (const struct sockaddr *)&client_addr, addrlen);
+        // broadcast game state to all players once per tick
+        for (unsigned i = 0; i < players.size(); i++) {
+            sendto(sockfd, &state, sizeof(state), 0,
+                (const struct sockaddr *)&client_addr[i], addrlen);
+        }
     }
 
     close(sockfd);
