@@ -9,11 +9,6 @@ struct player {
 class GameState {
 public:
     player players[MAX_PLAYERS];
-    GameState() {
-        srand(time(NULL));
-        for (auto &player:players) {
-            player.x = rand() % WORLD_SIZE;
-            player.y = rand() % WORLD_SIZE;
-        }
-    }
+    GameState();
+    void process_input(unsigned player_id, int client_input);
 };

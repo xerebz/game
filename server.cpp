@@ -16,26 +16,6 @@ using std::chrono::duration_cast;
 using std::chrono::microseconds;
 using std::chrono::high_resolution_clock;
 
-void process_input(unsigned player_id, int client_input, GameState &state) {
-    auto& player = state.players[player_id];
-    switch(client_input) {
-        case 'w':
-            if (player.y > 0) player.y--;
-            break;
-        case 'a':
-            if (player.x > 0) player.x--;
-            break;
-        case 's':
-            if (player.y < WORLD_SIZE) player.y++;
-            break;
-        case 'd':
-            if (player.x < WORLD_SIZE) player.x++;
-            break;
-        default:
-            break;
-    }
-}
-
 int main(int argc, char **argv)
 {
     if (argc != 2) {
@@ -45,7 +25,7 @@ int main(int argc, char **argv)
     const unsigned short port = atoi(argv[1]);
 
     int sockfd;
-    struct sockaddr_in client_addr[MAX_PLAYERS];
+    struct sockaddr_in client_addresses[MAX_PLAYERS];
     struct sockaddr_in current_client;
     socklen_t addrlen = sizeof(current_client);
     unordered_map<unsigned, unsigned> players;
@@ -82,16 +62,22 @@ int main(int argc, char **argv)
                 if (players.find(pid) == players.end()) {
                     // new player
                     players[pid] = players.size();
-                    client_addr[players[pid]] = current_client;
+                    client_addresses[players[pid]] = current_client;
+                }
+                if (client_input == 0) {
+                    // send player his id on connect
+                    // you can obv hijack a session by spoofing your port
+                    sendto(sockfd, &players[pid], sizeof(players[pid]), 0,
+                        (const struct sockaddr *)&current_client, addrlen);
                 }
                 // change game state
-                process_input(players[pid], client_input, state);
+                state.process_input(players[pid], client_input);
             }
         }
         // broadcast game state to all players once per tick
         for (unsigned i = 0; i < players.size(); i++) {
             sendto(sockfd, &state, sizeof(state), 0,
-                (const struct sockaddr *)&client_addr[i], addrlen);
+                (const struct sockaddr *)&client_addresses[i], addrlen);
         }
     }
 
